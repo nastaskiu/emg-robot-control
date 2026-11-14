@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>EMG Robot Control</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #f3f4f6;
+      --panel: #ffffff;
+      --border: #d1d5db;
+      --accent: #2563eb;
+      --accent-soft: rgba(37, 99, 235, 0.1);
+      --text-main: #111827;
+      --text-muted: #6b7280;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text-main);
+    }
+
+    #page {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    header {
+      margin-bottom: 16px;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    header p {
+      margin: 4px 0 0 0;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    #layout {
+      display: grid;
+      grid-template-columns: 260px 320px 1fr;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      padding: 12px 14px;
+    }
+
+    .panel-title {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .btn {
+      padding: 8px 14px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .btn:hover:enabled {
+      background: #1d4ed8;
+    }
+
+    .btn:disabled {
+      background: #9ca3af;
+      cursor: default;
+    }
+
+    #current-command {
+      margin-top: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: var(--accent-soft);
+      border: 1px solid rgba(37, 99, 235, 0.15);
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    #status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+
+    #world {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      background: #ffffff;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    }
+
+    #world-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* фон бесконечной карты */
+    #world-inner {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(#e5e7eb 1px, transparent 1px),
+        linear-gradient(90deg, #e5e7eb 1px, transparent 1px);
+      background-size: 20px 20px;
+      will-change: background-position;
+    }
+
+    #robot {
+      width: 40px;
+      height: 40px;
+      background: #158bf9;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      margin-top: -14px;
+      margin-left: -14px;
+      border-radius: 6px;
+      box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
+      transform-origin: 50% 50%;
+      transition: transform 0.12s;
+      z-index: 10;
+    }
+
+    /* «нос» робота */
+    #robot::before {
+      content: '';
+      position: absolute;
+      top: -7px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 0;
+      height: 0;
+      border-left: 6px solid transparent;
+      border-right: 6px solid transparent;
+      border-bottom: 9px solid #111827;
+    }
+
+    #robot.active {
+      transform: scale(1.12);
+    }
+
+    #world-meta {
+      margin-top: 6px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    #chart-container {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #chart-inner {
+      flex: 1;
+    }
+
+    #chart-inner canvas {
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    #chart-legend {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+
+    @media (max-width: 960px) {
+      #layout {
+        grid-template-columns: 1fr;
+      }
+      #world {
+        max-width: 320px;
+        margin: 0 auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="page">
+    <header>
+      <h1>EMG Module Sensor</h1>
+    </header>
+
+    <div id="layout">
+      <!-- Панель управления -->
+      <div class="panel">
+        <button class="btn" id="startBtn">Start</button>
+
+        <div id="current-command">Текущая команда: NONE</div>
+
+        <div id="status">
+          Жесты:<br>
+          • короткий вперед → FORWARD<br>
+          • 1.5–2.5 с вперед → LEFT<br>
+          • &gt;= 3.5 с вперед → BACKWARD<br>
+          • назад → RIGHT<br>
+          • покой → STOP
+        </div>
+      </div>
+
+      <!-- Мир с роботом -->
+      <div class="panel">
+        <div id="world-header">
+          <span class="panel-title" style="margin-bottom:0;">Карта</span>
+          <span id="coord-label">x: 0, y: 0, dir: 0°</span>
+        </div>
+        <div id="world">
+          <div id="world-inner"></div>
+          <div id="robot"></div>
+        </div>
+        <div id="world-meta">
+          <span id="mode-label">Режим: STOP</span>
+          <span id="last-gesture-label">Последний жест: —</span>
+        </div>
+      </div>
+
+      <!-- График EMG -->
+      <div class="panel" id="chart-container">
+        <div class="panel-title">Сигнал EMG</div>
+        <div id="chart-inner">
+          <canvas id="emgChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const socket = io();
+
+    const startBtn = document.getElementById('startBtn');
+    const currentCmdDiv = document.getElementById('current-command');
+    const worldInner = document.getElementById('world-inner');
+    const robot = document.getElementById('robot');
+    const coordLabel = document.getElementById('coord-label');
+    const modeLabel = document.getElementById('mode-label');
+    const lastGestureLabel = document.getElementById('last-gesture-label');
+
+    let worldX = 0;
+    let worldY = 0;
+    let heading = 0;
+    let currentCommand = 'STOP';
+    const speed = 3;
+    const stepInterval = 50;
+
+    function setCurrentCommand(text) {
+      currentCmdDiv.textContent = 'Текущая команда: ' + text;
+    }
+
+    function updateMeta() {
+      coordLabel.textContent =
+        'x: ' + worldX.toFixed(0) +
+        ', y: ' + worldY.toFixed(0) +
+        ', dir: ' + ((heading % 360 + 360) % 360) + '°';
+      modeLabel.textContent = 'Режим: ' + currentCommand;
+    }
+
+    function applyCommand(cmd, gestureType, label, duration, confidence) {
+      if (cmd === 'FORWARD') {
+        currentCommand = 'FORWARD';
+      } else if (cmd === 'BACKWARD') {
+        currentCommand = 'BACKWARD';
+      } else if (cmd === 'LEFT') {
+        heading -= 90;
+        currentCommand = 'FORWARD';
+      } else if (cmd === 'RIGHT') {
+        heading += 90;
+        currentCommand = 'FORWARD';
+      } else if (cmd === 'STOP') {
+        currentCommand = 'STOP';
+      }
+
+      const angle = ((heading % 360) + 360) % 360;
+      robot.style.transform = `rotate(${angle}deg)`;
+
+      setCurrentCommand(cmd);
+      lastGestureLabel.textContent =
+        `${gestureType || ''} ${label || ''} (${duration?.toFixed ? duration.toFixed(2) : duration || 0}s, conf=${confidence !== undefined ? confidence.toFixed(2) : '1.00'})`;
+      updateMeta();
+    }
+
+    function physicsStep() {
+      let dx = 0, dy = 0;
+
+      if (currentCommand === 'FORWARD' || currentCommand === 'BACKWARD') {
+        const dir = currentCommand === 'FORWARD' ? 1 : -1;
+        const rad = (heading - 90) * Math.PI / 180.0;
+        dx = Math.cos(rad) * speed * dir;
+        dy = Math.sin(rad) * speed * dir;
+      }
+
+      worldX += dx;
+      worldY += dy;
+
+      worldInner.style.backgroundPosition =
+        `${-worldX}px ${-worldY}px`;
+
+      if (currentCommand !== 'STOP') {
+        robot.classList.add('active');
+        setTimeout(() => robot.classList.remove('active'), stepInterval / 2);
+      }
+
+      const angle = ((heading % 360) + 360) % 360;
+      robot.style.transform = `rotate(${angle}deg)`;
+
+      updateMeta();
+    }
+
+    setInterval(physicsStep, stepInterval);
+
+    startBtn.onclick = function() {
+      socket.emit('start_emg', {start: true});
+      setCurrentCommand('Ожидание жеста...');
+      startBtn.disabled = true;
+    };
+
+    socket.on('command', function(data) {
+      applyCommand(
+        data.command,
+        data.type,
+        data.label,
+        data.duration,
+        data.confidence
+      );
+    });
+
+    const ctx = document.getElementById('emgChart').getContext('2d');
+    const chartData = {
+      labels: [],
+      datasets: [{
+        label: 'Envelope',
+        data: [],
+        borderColor: 'rgba(37, 99, 235, 1)',
+        backgroundColor: 'rgba(37, 99, 235, 0.08)',
+        tension: 0.15,
+        pointRadius: 0
+      }]
+    };
+
+    const emgChart = new Chart(ctx, {
+      type: 'line',
+      data: chartData,
+      options: {
+        animation: false,
+        plugins: {
+          legend: { display: false }
+        },
+        scales: {
+          x: { display: false },
+          y: {
+            beginAtZero: true,
+            ticks: { font: { size: 10 } }
+          }
+        }
+      }
+    });
+
+    socket.on('emg_sample', function(data) {
+      chartData.labels.push('');
+      chartData.datasets[0].data.push(data.envelope);
+
+      if (chartData.labels.length > 200) {
+        chartData.labels.shift();
+        chartData.datasets[0].data.shift();
+      }
+      emgChart.update('none');
+    });
+
+    updateMeta();
+  </script>
+</body>
+</html>
